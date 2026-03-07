@@ -3,29 +3,77 @@ import FormData from 'form-data';
 import fs from 'fs';
 import path from 'path';
 
+/**
+ * Normalize axios error to { success: false, error, code }.
+ * code is HTTP status when available (e.g. 404 for CID not in pinset).
+ */
+function toErrorPayload(error, extra = {}) {
+  const code = error.response?.status ?? (error.code || 500);
+  const message =
+    error.response?.data?.message ??
+    error.response?.data?.error ??
+    error.message;
+  return { success: false, error: message, code, ...extra };
+}
+
+/**
+ * Extract allocations array from GET /allocations/{cid} response (PinInfo).
+ * API may return: allocations, Allocations, or pin_info.allocations (by version).
+ */
+function getAllocationsFromPinInfo(data) {
+  if (Array.isArray(data?.allocations)) return data.allocations;
+  if (Array.isArray(data?.Allocations)) return data.Allocations;
+  if (Array.isArray(data?.pin_info?.allocations)) return data.pin_info.allocations;
+  if (Array.isArray(data?.pin_info?.Allocations)) return data.pin_info.Allocations;
+  return [];
+}
+
+/**
+ * Extract peer map / peers from GET /pins/{cid} response (GlobalPinInfo or PinInfo).
+ * API may return: peer_map, peers, or peer_map with peer IDs as keys.
+ */
+function getPeersFromStatus(data) {
+  if (data?.peer_map && typeof data.peer_map === 'object')
+    return data.peer_map;
+  if (Array.isArray(data?.peers)) return data.peers;
+  return data?.peers ?? data?.peer_map ?? null;
+}
+
+/**
+ * Extract allocations from status response (GET /pins/{cid}) when present.
+ */
+function getAllocationsFromStatus(data) {
+  if (Array.isArray(data?.allocations)) return data.allocations;
+  if (Array.isArray(data?.Allocations)) return data.Allocations;
+  return null;
+}
+
 class IPFSClusterClient {
   constructor({ host = 'localhost', port = '9094', protocol = 'http' } = {}) {
     this.baseUrl = `${protocol}://${host}:${port}`;
   }
 
-  // Test connection
   async checkConnection() {
     try {
       const response = await axios.get(`${this.baseUrl}/id`, {
         timeout: 3000
       });
+      const d = response.data;
       return {
         connected: true,
-        version: response.data.version,
-        peerId: response.data.id,
-        clusterId: response.data.cluster_peer_id
+        version: d.version,
+        peerId: d.id,
+        clusterId: d.cluster_peer_id ?? d.id,
+        peername: d.peername,
+        clusterPeers: d.cluster_peers,
+        ipfsId: d.ipfs?.id,
+        addresses: d.addresses
       };
     } catch (error) {
       return {
+        ...toErrorPayload(error, { endpoint: `${this.baseUrl}/id` }),
         connected: false,
-        error: error.message,
-        code: error.response?.status || 'ECONNREFUSED',
-        endpoint: `${this.baseUrl}/id`
+        code: error.response?.status ?? error.code ?? 'ECONNREFUSED'
       };
     }
   }
@@ -52,11 +100,7 @@ class IPFSClusterClient {
         timestamp: new Date().toISOString()
       };
     } catch (error) {
-      return {
-        success: false,
-        error: error.message,
-        code: error.response?.status || 500
-      };
+      return toErrorPayload(error);
     }
   }
 
@@ -95,11 +139,7 @@ class IPFSClusterClient {
         type: 'directory'
       };
     } catch (error) {
-      return {
-        success: false,
-        error: error.message,
-        code: error.response?.status || 500
-      };
+      return toErrorPayload(error);
     }
   }
 
@@ -116,33 +156,49 @@ class IPFSClusterClient {
         ...response.data
       };
     } catch (error) {
-      return {
-        success: false,
-        cid,
-        error: error.message,
-        code: error.response?.status || 500
-      };
+      return { ...toErrorPayload(error), cid };
     }
   }
 
-  // Get the status of a CID in the cluster
   async status(cid) {
     try {
       const response = await axios.get(`${this.baseUrl}/pins/${cid}`);
+      const d = response.data;
+      const peerMap = d.peer_map && typeof d.peer_map === 'object' ? d.peer_map : {};
+      const peersArray = Object.keys(peerMap).map((peerId) => ({
+        id: peerId,
+        peername: peerMap[peerId].peername,
+        ipfs_peer_id: peerMap[peerId].ipfs_peer_id,
+        status: peerMap[peerId].status,
+        timestamp: peerMap[peerId].timestamp,
+        error: peerMap[peerId].error
+      }));
+      const allStatuses = Object.values(peerMap).map((p) => p.status);
+      const overallStatus =
+        allStatuses.length === 0
+          ? (d.status ?? d.Status ?? null)
+          : allStatuses.every((s) => s === 'pinned')
+            ? 'pinned'
+            : allStatuses.some((s) => s === 'pinned')
+              ? 'partial'
+              : 'unpinned';
+      const allocations = getAllocationsFromStatus(d);
       return {
         success: true,
-        cid,
-        status: response.data.status,
-        peers: response.data.peers,
+        cid: d.cid ?? d.Cid ?? cid,
+        status: overallStatus,
+        peers: peersArray.length ? peersArray : (getPeersFromStatus(d) ?? undefined),
+        peer_map: Object.keys(peerMap).length ? peerMap : undefined,
+        allocations: allocations ?? undefined,
+        replication_factor: d.replication_factor ?? d.ReplicationFactor,
+        name: d.name ?? d.Name,
+        created: d.created,
+        origins: d.origins,
+        metadata: d.metadata,
         timestamp: new Date().toISOString()
       };
     } catch (error) {
-      return {
-        success: false,
-        cid,
-        error: error.message,
-        code: error.response?.status || 500
-      };
+      return { ...toErrorPayload(error), cid };
     }
   }
 
@@ -158,12 +214,7 @@ class IPFSClusterClient {
         ...response.data
       };
     } catch (error) {
-      return {
-        success: false,
-        cid,
-        error: error.message,
-        code: error.response?.status || 500
-      };
+      return { ...toErrorPayload(error), cid };
     }
   }
 
@@ -178,71 +229,76 @@ class IPFSClusterClient {
         timestamp: new Date().toISOString()
       };
     } catch (error) {
-      return {
-        success: false,
-        error: error.message,
-        code: error.response?.status || 500
-      };
+      return toErrorPayload(error);
     }
   }
 
-  // Get the allocations (nodes) for a CID
+  // Get the allocations (nodes) for a CID (GET /allocations/{cid}).
+  // PinInfo may use "allocations", "Allocations", or nested pin_info; we normalize to nodes + pin_info.
   async allocations(cid) {
     try {
       const response = await axios.get(`${this.baseUrl}/allocations/${cid}`);
+      const data = response.data;
+      const nodes = getAllocationsFromPinInfo(data);
       return {
         success: true,
-        cid,
-        nodes: response.data.allocations,
-        timestamp: new Date().toISOString()
+        cid: data.cid ?? data.Cid ?? cid,
+        nodes,
+        replication_factor: data.replication_factor ?? data.ReplicationFactor,
+        name: data.name ?? data.Name,
+        timestamp: new Date().toISOString(),
+        pin_info: data
       };
     } catch (error) {
-      return {
-        success: false,
-        cid,
-        error: error.message,
-        code: error.response?.status || 500
-      };
+      return { ...toErrorPayload(error), cid };
     }
   }
 
-  // Get the health status of the cluster
   async health() {
     try {
       const response = await axios.get(`${this.baseUrl}/health`);
+      const data = response.data ?? {};
       return {
         success: true,
-        status: response.data.status,
+        status: response.status === 204 ? 'ok' : (data.status ?? response.status),
         timestamp: new Date().toISOString(),
-        details: response.data
+        details: Object.keys(data).length ? data : { status: 'ok', code: response.status }
       };
     } catch (error) {
-      return {
-        success: false,
-        error: error.message,
-        code: error.response?.status || 500
-      };
+      return toErrorPayload(error);
     }
   }
 
-  // List the peers (nodes) in the cluster
+  async version() {
+    try {
+      const response = await axios.get(`${this.baseUrl}/version`);
+      return {
+        success: true,
+        version: response.data?.version ?? response.data,
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      return toErrorPayload(error);
+    }
+  }
+
   async peers() {
     try {
       const response = await axios.get(`${this.baseUrl}/peers`);
+      const data = response.data;
+      const list = Array.isArray(data) ? data : data?.peers ?? [];
       return {
         success: true,
-        status: response.data.status,
+        peers: list,
+        count: list.length,
         timestamp: new Date().toISOString(),
-        details: response.data
+        details: data
       };
     } catch (error) {
-      return {
-        success: false,
-        error: error.message,
-        code: error.response?.status || 500
-      };
+      return toErrorPayload(error);
     }
   }
 }
 
 export { IPFSClusterClient };
+export { toErrorPayload, getAllocationsFromPinInfo, getPeersFromStatus, getAllocationsFromStatus };

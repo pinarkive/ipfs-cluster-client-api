@@ -1,6 +1,6 @@
 # ipfs-cluster-client-api
 
-> A simple Node.js client library for interacting with the IPFS Cluster HTTP API.
+> A simple Node.js client library for interacting with the IPFS Cluster HTTP API (one cluster endpoint per client; see [official API reference](https://ipfscluster.io/documentation/reference/api/)).
 
 ## Table of contents <!-- omit in toc -->
 
@@ -16,9 +16,11 @@
     - [listPins()](#listpins)
     - [allocations(cid)](#allocationscid)
     - [health()](#health)
+    - [version()](#version)
     - [peers()](#peers)
     - [checkConnection()](#checkconnection)
 - [Requirements](#requirements)
+- [Publishing to npm](#publishing-to-npm)
 - [License](#license)
 
 ## Installation
@@ -55,8 +57,8 @@ Uploads a single file to the IPFS Cluster and returns its CID.
 
 - **Parameters**:
   - `filePath` (string): Path to the file on the local filesystem.
-- **Returns**: Promise resolving to:
-  - Success: `{ success: true, cid: string, path: string, size: number, type: 'file', timestamp: string }`
+- **Returns**: Promise resolving to (never throws):
+  - Success: `{ success: true, cid, path, size, type: 'file', timestamp }`
   - Failure: `{ success: false, error: string, code: number }`
 - **Example**:
 ```javascript
@@ -73,8 +75,8 @@ Uploads an entire directory recursively and returns an array of CIDs.
 
 - **Parameters**:
   - `dirPath` (string): Path to the directory on the local filesystem.
-- **Returns**: Promise resolving to:
-  - Success: `{ success: true, count: number, items: [{ name: string, cid: string, size: number, path: string }], type: 'directory' }`
+- **Returns**: Promise resolving to (never throws):
+  - Success: `{ success: true, count, items, type: 'directory' }`
   - Failure: `{ success: false, error: string, code: number }`
 - **Example**:
 ```javascript
@@ -91,9 +93,9 @@ Pins a CID to the IPFS Cluster.
 
 - **Parameters**:
   - `cid` (string): Content Identifier to pin.
-- **Returns**: Promise resolving to:
-  - Success: `{ success: true, cid: string, status: 'pinned', operation: 'pin', timestamp: string, ...additionalData }`
-  - Failure: `{ success: false, cid: string, error: string, code: number }`
+- **Returns**: Promise resolving to (never throws):
+  - Success: `{ success: true, cid, status: 'pinned', operation: 'pin', timestamp, ...response.data }`
+  - Failure: `{ success: false, cid, error: string, code: number }`
 - **Example**:
 ```javascript
 client.pin('Qm...').then(result => {
@@ -105,18 +107,21 @@ client.pin('Qm...').then(result => {
 
 #### status(cid)
 
-Retrieves the status of a CID in the cluster.
+Retrieves the status of a CID in the cluster (GET /pins/{cid}). Response is normalized from the cluster’s PinInfo/GlobalPinInfo (peer_map, peers, allocations may vary by cluster version).
 
 - **Parameters**:
   - `cid` (string): Content Identifier to check.
 - **Returns**: Promise resolving to:
-  - Success: `{ success: true, cid: string, status: string, peers: array, timestamp: string }`
-  - Failure: `{ success: false, cid: string, error: string, code: number }`
+  - Success: `{ success: true, cid, status, peers, peer_map?, allocations?, replication_factor?, name?, created?, origins?, metadata?, timestamp }`
+  - Failure: `{ success: false, cid, error: string, code: number }` (e.g. 404 when CID not in pinset; never throws).
 - **Example**:
 ```javascript
 client.status('Qm...').then(result => {
   if (result.success) {
-    console.log(`Status of ${result.cid}: ${result.status}`);
+    console.log(`Status: ${result.status}`, result.peer_map || result.peers);
+    if (result.allocations) console.log('Allocations:', result.allocations);
+  } else if (result.code === 404) {
+    console.log('CID not in pinset');
   }
 });
 ```
@@ -127,9 +132,9 @@ Removes a pin from the cluster.
 
 - **Parameters**:
   - `cid` (string): Content Identifier to unpin.
-- **Returns**: Promise resolving to:
-  - Success: `{ success: true, cid: string, operation: 'remove', timestamp: string, ...additionalData }`
-  - Failure: `{ success: false, cid: string, error: string, code: number }`
+- **Returns**: Promise resolving to (never throws):
+  - Success: `{ success: true, cid, operation: 'remove', timestamp, ...response.data }`
+  - Failure: `{ success: false, cid, error: string, code: number }`
 - **Example**:
 ```javascript
 client.remove('Qm...').then(result => {
@@ -143,8 +148,8 @@ client.remove('Qm...').then(result => {
 
 Lists all pinned CIDs in the cluster.
 
-- **Returns**: Promise resolving to:
-  - Success: `{ success: true, count: number, pins: array, timestamp: string }`
+- **Returns**: Promise resolving to (never throws):
+  - Success: `{ success: true, count, pins, timestamp }`
   - Failure: `{ success: false, error: string, code: number }`
 - **Example**:
 ```javascript
@@ -157,51 +162,63 @@ client.listPins().then(result => {
 
 #### allocations(cid)
 
-Gets the nodes where a CID is stored.
+Gets the nodes (allocations) where a CID is stored (GET /allocations/{cid}). The client normalizes the PinInfo response: the cluster may return `allocations`, `Allocations`, or nested `pin_info` depending on version.
 
 - **Parameters**:
   - `cid` (string): Content Identifier to query.
 - **Returns**: Promise resolving to:
-  - Success: `{ success: true, cid: string, nodes: array, timestamp: string }`
-  - Failure: `{ success: false, cid: string, error: string, code: number }`
+  - Success: `{ success: true, cid, nodes: array, replication_factor?, name?, pin_info, timestamp }`
+  - Failure: `{ success: false, cid, error: string, code: number }` (e.g. 404 when not in pinset; never throws).
 - **Example**:
 ```javascript
 client.allocations('Qm...').then(result => {
   if (result.success) {
     console.log(`Nodes for ${result.cid}:`, result.nodes);
+  } else if (result.code === 404) {
+    console.log('CID not in pinset');
   }
 });
 ```
 
 #### health()
 
-Gets the health status of the cluster.
+Gets the health status of the cluster (GET /health; API returns 204 with no body).
 
-- **Returns**: Promise resolving to:
-  - Success: `{ success: true, status: string, timestamp: string, details: object }`
+- **Returns**: Promise resolving to (never throws):
+  - Success: `{ success: true, status, timestamp, details }`
   - Failure: `{ success: false, error: string, code: number }`
 - **Example**:
 ```javascript
 client.health().then(result => {
-  if (result.success) {
-    console.log('Cluster health:', result.details);
-  }
+  if (result.success) console.log('Cluster health:', result.details);
+});
+```
+
+#### version()
+
+Gets the cluster version (GET /version).
+
+- **Returns**: Promise resolving to (never throws):
+  - Success: `{ success: true, version, timestamp }`
+  - Failure: `{ success: false, error: string, code: number }`
+- **Example**:
+```javascript
+client.version().then(result => {
+  if (result.success) console.log('Cluster version:', result.version);
 });
 ```
 
 #### peers()
 
-Lists the peers (nodes) in the cluster.
+Lists the peers in the cluster (GET /peers).
 
-- **Returns**: Promise resolving to:
-  - Success: `{ success: true, status: string, timestamp: string, details: object }`
+- **Returns**: Promise resolving to (never throws):
+  - Success: `{ success: true, peers, count, timestamp, details }`
   - Failure: `{ success: false, error: string, code: number }`
 - **Example**:
 ```javascript
 client.peers().then(result => {
-  if (result.success) {
-    console.log('Cluster peers:', result.details);
-  }
+  if (result.success) console.log('Cluster peers:', result.peers ?? result.details);
 });
 ```
 
@@ -209,9 +226,9 @@ client.peers().then(result => {
 
 Tests the connection to the IPFS Cluster.
 
-- **Returns**: Promise resolving to:
-  - Success: `{ connected: true, version: string, peerId: string, clusterId: string }`
-  - Failure: `{ connected: false, error: string, code: string|number, endpoint: string }`
+- **Returns**: Promise resolving to (never throws):
+  - Success: `{ connected: true, version, peerId, clusterId }`
+  - Failure: `{ connected: false, success: false, error, code, endpoint }`
 - **Example**:
 ```javascript
 client.checkConnection().then(result => {
@@ -223,6 +240,33 @@ client.checkConnection().then(result => {
 });
 ```
 
+## Error handling
+
+All methods **never throw** on HTTP or network errors. On failure they return an object:
+
+- `success: false`
+- `error`: string (message from server when available, else `error.message`)
+- `code`: HTTP status (e.g. `404` when CID is not in pinset) or `'ECONNREFUSED'` etc.
+
+So the backend can branch on `result.success` and `result.code === 404` for fallbacks or to respond 404 to the client.
+
+## API alignment
+
+Endpoints used (see [ipfscluster.io/documentation/reference/api](https://ipfscluster.io/documentation/reference/api/)):
+
+| Method | Endpoint | Client method |
+|--------|----------|----------------|
+| GET | /id | checkConnection() |
+| POST | /add | add() |
+| GET | /pins | listPins() |
+| GET | /pins/{cid} | status() |
+| POST | /pins/{cid} | pin() |
+| DELETE | /pins/{cid} | remove() |
+| GET | /allocations/{cid} | allocations() |
+| GET | /health | health() |
+| GET | /version | version() |
+| GET | /peers | peers() |
+
 ## Requirements
 
 - **Node.js**: v14.x or higher
@@ -231,6 +275,17 @@ client.checkConnection().then(result => {
   - `axios`: For HTTP requests
   - `form-data`: For multipart file uploads
   - `fs` and `path`: Node.js built-in modules
+
+## Publishing to npm
+
+The package is published to npm when you **push a tag** `v*` (e.g. `v0.1.6`). Workflow: [`.github/workflows/publish.yml`](.github/workflows/publish.yml) (environment: **production**).
+
+1. **One-time setup**: Add secret **`NPM_TOKEN`** in the **production** environment (Settings → Environments → production → Environment secrets) or in the repo secrets. Create the token at [npm → Access Tokens](https://www.npmjs.com/settings/~youruser/tokens) (e.g. "Automation" or "Publish").
+
+2. **For each release** (e.g. v0.1.6):
+   - Bump `version` in `package.json`, commit and push.
+   - Create and push the tag: `git tag v0.1.6 && git push origin v0.1.6`
+   - The workflow runs on tag push and runs `npm publish`.
 
 ## License
 

@@ -124,19 +124,37 @@ async function runTests() {
     console.error('❌ remove() failed:', removeResult.error);
   }
 
-  // 7. Test allocations() - Check allocations (improved)
-  console.log('\n4. Testing allocations()...');
+  // 7. Test allocations() - after remove, CID not in pinset (expect 404 or empty nodes)
+  console.log('\n7. Testing allocations()...');
   const allocResult = await client.allocations(testCid);
   if (allocResult.success) {
     console.log('✅ allocations() success:', {
-      nodes: allocResult.nodes?.length || 0,
+      nodes: allocResult.nodes?.length ?? 0,
       cid: allocResult.cid
     });
   } else {
-    console.log('ℹ️ allocations() failed:', {
-      error: allocResult.error,
-      expected: allocResult.code === 404 ? '(content may not be replicated yet)' : ''
-    });
+    if (allocResult.code === 404) {
+      console.log('✅ allocations() returned expected error (CID not in pinset):', {
+        success: allocResult.success,
+        code: allocResult.code,
+        hasError: typeof allocResult.error === 'string'
+      });
+    } else {
+      console.log('ℹ️ allocations() failed:', allocResult.error, 'code:', allocResult.code);
+    }
+  }
+
+  // 7b. Error response shape: any failed call must return { success: false, error, code }
+  console.log('\n7b. Testing error response shape...');
+  const statusBad = await client.status('QmXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX');
+  const hasErrorShape =
+    statusBad.success === false &&
+    'error' in statusBad &&
+    'code' in statusBad;
+  if (hasErrorShape) {
+    console.log('✅ Error response shape OK:', { success: false, code: statusBad.code });
+  } else {
+    console.log('⚠️ Unexpected error shape:', statusBad);
   }
 
   // 8. Test health() - Cluster health
@@ -156,9 +174,12 @@ async function runTests() {
   console.log('\n9. Testing peers()...');
   const peersResult = await client.peers();
   if (peersResult.success) {
+    const peersList = peersResult.peers ?? peersResult.details;
+    const count = Array.isArray(peersList) ? peersList.length : 0;
+    const sample = Array.isArray(peersList) ? peersList[0] : null;
     console.log('✅ peers() success:', {
-      count: peersResult.peers?.length || 0,
-      samplePeer: peersResult.peers?.[0]?.id || 'N/A'
+      count: peersResult.count ?? count,
+      samplePeer: sample?.id ?? sample?.peer_id ?? 'N/A'
     });
   } else {
     console.error('❌ peers() failed:', peersResult.error);
