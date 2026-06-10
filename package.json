@@ -1,18 +1,24 @@
 {
   "name": "ipfs-cluster-client-api",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "A client library for IPFS Cluster HTTP API",
   "type": "module",
   "main": "src/index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pinarkive/ipfs-cluster-client-api.git"
+  },
   "scripts": {
-    "test": "node test.js"
+    "test": "node test.js",
+    "test:unit": "node --test test/unit.test.js",
+    "lint": "eslint src/index.js test.js test/unit.test.js"
   },
   "keywords": ["ipfs", "ipfs-cluster", "client", "api"],
   "author": "Joel D. <joel.domenech@gmail.com>",
   "license": "MIT",
   "dependencies": {
-    "axios": "^1.8.4",
-    "form-data": "^4.0.2"
+    "axios": "^1.17.0",
+    "form-data": "^4.0.5"
   },
   "devDependencies": {
     "@eslint/js": "^9.23.0",
