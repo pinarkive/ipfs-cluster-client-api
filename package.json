@@ -1,6 +1,6 @@
 {
   "name": "ipfs-cluster-client-api",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "A client library for IPFS Cluster HTTP API",
   "type": "module",
   "main": "src/index.js",
@@ -13,7 +13,12 @@
     "test:unit": "node --test test/unit.test.js",
     "lint": "eslint src/index.js test.js test/unit.test.js"
   },
-  "keywords": ["ipfs", "ipfs-cluster", "client", "api"],
+  "keywords": [
+    "ipfs",
+    "ipfs-cluster",
+    "client",
+    "api"
+  ],
   "author": "Joel D. <joel.domenech@gmail.com>",
   "license": "MIT",
   "dependencies": {
