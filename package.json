@@ -1,6 +1,7 @@
 {
   "name": "ipfs-cluster-client-api",
   "version": "0.1.8",
+  "engines": { "node": ">=20" },
   "description": "A client library for IPFS Cluster HTTP API",
   "type": "module",
   "main": "src/index.js",
